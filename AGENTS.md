@@ -84,14 +84,18 @@ adb shell dumpsys gfxinfo <pkg>
 
 ### Baseline profile
 
-`:baselineprofile` 采集冷启动 + 滑动路径，产物 `app/src/main/baseline-prof.txt`。
-需要 API 28+ 的设备或模拟器：
+`:baselineprofile` 采集冷启动 + 滑动路径，产物在
+`app/src/release/generated/baselineProfiles/baseline-prof.txt`（`saveInSrc = true`），
+提交后 AGP 会打进 APK。需要 API 28+ 的设备或模拟器：
 
 ```bash
 ANDROID_SERIAL=<serial> ./gradlew :app:generateBaselineProfile
 ```
 
 API 24~27 由 `androidx.profileinstaller` 在启动时安装 profile；API 28+ 由系统在安装时处理。
+
+**CI 采集：** `.github/workflows/baseline-profile.yml`，手动触发，ubuntu runner 上用
+emulator-runner 起 API 34 模拟器，跑完把 `baseline-prof.txt` 作为 artifact 上载。
 
 **已知限制：Windows 上跑不了。** 插件会为采集创建 `nonMinifiedRelease` /
 `benchmarkRelease` 变体，这两个变体的 `:app:compile*Kotlin` 会把一个 Provider 当成
