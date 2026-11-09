@@ -95,21 +95,28 @@ class FastImageLoader private constructor(
 
     fun load(view: ImageView, url: String, width: Int, height: Int) {
         release(view)
-        val hit = memory.get(keyOf(url, width, height)) ?: nearest(url, width, height)
-        if (hit != null) {
-            view.setImageBitmap(hit)
+        val exact = memory.get(keyOf(url, width, height))
+        if (exact != null) {
+            view.setImageBitmap(exact)
+            return
+        }
+        // 尺寸够接近的缓存图直接当结果；差太多的先当占位，同时请求正确尺寸
+        val near = nearest(url, width, height)
+        if (near != null && !isTooSmall(near, width, height)) {
+            view.setImageBitmap(near)
             return
         }
         val req = enqueue(url, width, height, PRIORITY_VISIBLE)
         req.addTarget(view)
         view.tag = req
+        if (near != null) view.setImageBitmap(near)
     }
 
     /** 滚动预取：只解到内存，不碰 UI；排在可见请求之后。 */
     fun prefetch(url: String, width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
         if (memory.get(keyOf(url, width, height)) != null) return
-        if (nearest(url, width, height) != null) return
+        nearest(url, width, height)?.let { if (!isTooSmall(it, width, height)) return }
         enqueue(url, width, height, PRIORITY_PREFETCH)
     }
 
@@ -156,6 +163,19 @@ class FastImageLoader private constructor(
         try {
             if (req.cancelled) return
             val bytes = bytesFor(req.url) ?: return
+            if (req.cancelled) return
+
+            // 有 UI 在等时先解一张 1/4 尺寸的粗图，内容先上屏，再从模糊换到清晰。
+            // 预取没有 UI，跳过这一遍。
+            if (req.hasTargets() && req.width * req.height >= MIN_COARSE_AREA) {
+                val cw = (req.width / COARSE_DIVISOR).coerceAtLeast(1)
+                val ch = (req.height / COARSE_DIVISOR).coerceAtLeast(1)
+                decodeWithRetry(bytes, cw, ch)?.let { coarse ->
+                    if (req.cancelled) return
+                    main.post { req.deliver(coarse) }
+                }
+            }
+
             if (req.cancelled) return
             val bitmap = decodeWithRetry(bytes, req.width, req.height) ?: return
             memory.put(req.key, bitmap)
@@ -209,6 +229,10 @@ class FastImageLoader private constructor(
     private fun nearest(url: String, w: Int, h: Int): Bitmap? =
         index.nearest(url, w, h)?.let { memory.get(it) }
 
+    /** 面积不到目标一半的缓存图只能当占位，不能当结果。 */
+    private fun isTooSmall(bitmap: Bitmap, w: Int, h: Int): Boolean =
+        bitmap.width.toLong() * bitmap.height * 2 < w.toLong() * h
+
     private fun release(view: ImageView) {
         (view.tag as? Pending)?.detach(view)
         view.tag = null
@@ -246,6 +270,8 @@ class FastImageLoader private constructor(
         fun addTarget(view: ImageView) {
             targets.add(WeakReference(view))
         }
+
+        fun hasTargets(): Boolean = targets.isNotEmpty()
 
         override fun detach(view: ImageView) {
             targets.removeAll { it.get() == null || it.get() === view }
@@ -322,6 +348,8 @@ class FastImageLoader private constructor(
         private const val THREADS = 4
         private const val PRIORITY_VISIBLE = 0
         private const val PRIORITY_PREFETCH = 1
+        private const val COARSE_DIVISOR = 4
+        private const val MIN_COARSE_AREA = 128 * 128
 
         private fun priorityOf(task: Runnable): Int =
             (task as? DecodeTask)?.priority ?: Int.MAX_VALUE
