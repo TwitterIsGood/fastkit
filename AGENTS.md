@@ -10,9 +10,11 @@
 - **禁止垂直 RecyclerView 嵌套垂直 RecyclerView。** 一屏多区块用 `FlatSectionAdapter`，
   每个区块实现一个 `Section`（只描述 item 数量、布局、绑定）。
 - 新增区块 = 新增一个 `Section` 子类，不得改动 `FlatSectionAdapter` 的定位逻辑。
-- 列表初始化统一调用 `RecyclerView.setupForFeed()`：关闭 itemAnimator、固定尺寸、
-  限制每类 ViewHolder 缓存。
+- 列表初始化统一调用 `RecyclerView.setupForFeed()`（必须在设置 layoutManager 之后）：
+  关闭 itemAnimator、固定尺寸、限制每类 ViewHolder 缓存、设置初始预取数量。
 - `onViewRecycled` 必须做清理（取消图片、清空 drawable、解绑监听）。
+- 局部刷新用 `notifySectionChanged(section, start, count, payload)`，
+  区块实现 `onBindPayload()`，不要整块重新 bind。
 - 需要横向滚动时，子列表 `setNestedScrollingEnabled(false)`。
 
 ### 图片
@@ -22,8 +24,11 @@
 - 缓存键必须含目标宽高。不允许出现只按 URL 索引的图片缓存。
 - 解码不得发生在主线程。主线程只允许：命中缓存后 `setImageBitmap`。
 - 位图优先 `RGB_565`；需要透明/渐变时才用 `ARGB_8888`。
-- View 复用或销毁时取消未完成的请求。
+- View 复用或销毁时 `clear()`：取消未完成请求并清空 drawable。
+- 同一 `(url, w, h)` 的并发请求必须共享一次下载和解码；滚动预取走 `prefetch()`，
+  它的优先级低于可见区域。
 - 图片 URL 若由自家 CDN 提供，一律经 `CdnSize.apply()` 带上尺寸参数。
+- 磁盘缓存的写入必须是"临时文件 + rename"，不允许直接写目标文件。
 
 ### 渲染与线程
 
@@ -38,7 +43,7 @@
 ```bash
 # 冷启动
 adb shell am force-stop <pkg>
-adb shell am start -W -n <pkg>/.MainActivity
+adb shell am start -W -n <pkg>/.DemoActivity   # demo 的入口
 
 # 滑动帧数据
 adb shell dumpsys gfxinfo <pkg> reset
@@ -60,12 +65,25 @@ adb shell dumpsys gfxinfo <pkg>
 ## 构建
 
 ```bash
-JAVA_HOME=<jdk17> ./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug
 ```
 
-- Gradle 8.5+，AGP 8.5，Kotlin 2.1，JDK 17。
+- Gradle 8.14.3（wrapper 已入库），AGP 8.13，Kotlin 2.1，JDK 17。
+- 版本统一在 `gradle/libs.versions.toml`，模块里不写死版本号。
 - `local.properties` 不入库，由各自的机器生成。
 - 新增依赖前先确认对低端机的代价；能用平台 API 就不加库。
+- 新增能力放独立模块（`fastkit-*`），不要往现有两个 SDK 里塞无关功能。
+
+### Baseline profile
+
+`:baselineprofile` 采集冷启动 + 滑动路径，产物 `app/src/main/baseline-prof.txt`。
+需要 API 28+ 的设备或模拟器：
+
+```bash
+./gradlew :app:generateBaselineProfile
+```
+
+API 24~27 由 `androidx.profileinstaller` 在启动时安装 profile；API 28+ 由系统在安装时处理。
 
 ## 不要做的事
 
@@ -78,12 +96,19 @@ JAVA_HOME=<jdk17> ./gradlew :app:assembleDebug
 ## 目录约定
 
 ```
-app/src/main/java/<namespace>/fastkit/
-  FastImageLoader.kt        图片加载（缓存/解码/取消/预取）
-  FlatSectionAdapter.kt     扁平列表
-  PrefetchScrollListener.kt 滚动预取
+fastkit-image/src/main/java/io/github/twitterisgood/fastkit/image/
+  FastImageLoader.kt        图片加载（缓存/解码/取消/预取/去重/内存压力）
   CdnSize.kt                图床尺寸参数
-  DemoActivity.kt           示例
+
+fastkit-list/src/main/java/io/github/twitterisgood/fastkit/list/
+  FlatSectionAdapter.kt     扁平列表 + SectionHolder
+  PrefetchScrollListener.kt 滚动预取
+
+app/src/main/java/io/github/twitterisgood/fastkit/demo/
+  DemoActivity.kt           示例，同时依赖两个 SDK
+
+baselineprofile/            baseline.prof 采集，不参与 app 构建
 ```
 
-新增模块放进独立 package，不要塞进 `fastkit` 根包。
+- `:fastkit-image` 不依赖 `:fastkit-list`，反之亦然。两者之间只能靠调用方用 lambda 连接。
+- 新能力新建 Gradle 模块 + 独立 namespace，不要塞进现有模块的根包。

@@ -1,4 +1,4 @@
-package io.github.twitterisgood.fastkit
+package io.github.twitterisgood.fastkit.list
 
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView

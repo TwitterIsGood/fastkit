@@ -15,4 +15,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "fastkit"
+
 include(":app")
+include(":fastkit-image")
+include(":fastkit-list")
+include(":baselineprofile")

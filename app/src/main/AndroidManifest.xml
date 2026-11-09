@@ -10,6 +10,8 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <profileable android:shell="true" />
+
         <activity
             android:name=".DemoActivity"
             android:exported="true">

@@ -1,23 +1,45 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.androidx.baselineprofile)
+}
+
+baselineProfile {
+    // 生成的 profile 直接写到 app/src/main，跟着仓库走
+    saveInSrc = true
 }
 
 android {
-    namespace = "io.github.twitterisgood.fastkit"
-    compileSdk = 34
+    namespace = "io.github.twitterisgood.fastkit.demo"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.twitterisgood.fastkit"
+        applicationId = "io.github.twitterisgood.fastkit.demo"
         minSdk = 21
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        create("benchmark") {
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -32,5 +54,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation(project(":fastkit-image"))
+    implementation(project(":fastkit-list"))
+    implementation(libs.androidx.profileinstaller)
 }
