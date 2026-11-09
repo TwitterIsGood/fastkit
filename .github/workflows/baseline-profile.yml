@@ -23,7 +23,8 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
-          target: aosp
+          # API 34 的 AOSP 镜像在 sdkmanager 里叫 default
+          target: default
           arch: x86_64
           profile: pixel_6
           disable-animations: true
