@@ -31,6 +31,8 @@
   预取不做粗图那一遍。近似尺寸的缓存图如果面积不到目标的一半，只能当占位，不能当结果。
 - 图片 URL 若由自家 CDN 提供，一律经 `CdnSize.apply()` 带上尺寸参数。
 - 磁盘缓存的写入必须是"临时文件 + rename"，不允许直接写目标文件。
+- `inBitmap` 复用的位图，必须确认没有 view 还在显示它才允许回池（`BitmapPool` 用引用计数保证）；
+  解码选项必须打开 `inMutable`，否则解码结果不可变，`inBitmap` 永远不生效。
 
 ### 渲染与线程
 
@@ -68,8 +70,12 @@ adb shell dumpsys gfxinfo <pkg>
 
 ```bash
 ./gradlew :app:assembleDebug
+./gradlew :fastkit-image:testDebugUnitTest :fastkit-list:testDebugUnitTest
 ```
 
+- CI（`.github/workflows/android.yml`）跑单测、debug/release 构建和两个库的 lint。
+- 解码/索引这类纯逻辑要有 JVM 单测；需要 `Bitmap`/`Canvas` 的放 instrumented 测试
+  （方法名只能用英文，DEX 040 之前的版本不允许 SimpleName 带空格）。
 - Gradle 8.14.3（wrapper 已入库），AGP 8.13，Kotlin 2.1，JDK 17。
 - 版本统一在 `gradle/libs.versions.toml`，模块里不写死版本号。
 - `local.properties` 不入库，由各自的机器生成。
@@ -100,10 +106,12 @@ API 24~27 由 `androidx.profileinstaller` 在启动时安装 profile；API 28+ �
 ```
 fastkit-image/src/main/java/io/github/twitterisgood/fastkit/image/
   FastImageLoader.kt        图片加载（缓存/解码/取消/预取/去重/内存压力）
+  BitmapPool.kt             inBitmap 复用池（引用计数，在屏位图不回池）
   CdnSize.kt                图床尺寸参数
 
 fastkit-list/src/main/java/io/github/twitterisgood/fastkit/list/
   FlatSectionAdapter.kt     扁平列表 + SectionHolder
+  SectionIndex.kt           区块前缀和（纯 Kotlin，可单测）
   PrefetchScrollListener.kt 滚动预取
 
 app/src/main/java/io/github/twitterisgood/fastkit/demo/

@@ -54,6 +54,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Demo 用 `local://seed/WxH` 在本地生成 JPEG，走完整的下载→缓存→两遍解码链路，
 不依赖网络。接真实图床时替换 `FastImageLoader.bytesFor()` 里的分支即可。
 
+单测与 CI：
+
+```bash
+./gradlew :fastkit-image:testDebugUnitTest :fastkit-list:testDebugUnitTest
+```
+
+`.github/workflows/android.yml` 在推送时跑单测、debug/release 构建和两个库的 lint。
+
 生成 baseline profile 需要一个 API 28+ 的设备或模拟器：
 
 ```bash
