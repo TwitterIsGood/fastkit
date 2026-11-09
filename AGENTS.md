@@ -66,6 +66,10 @@ adb shell dumpsys gfxinfo <pkg>
 测的时候要区分「有缓存」和「清空内存+磁盘缓存」两种，后者才反映真实最坏情况。
 屏幕锁定会让 gfxinfo 采不到帧，测前先 `input keyevent KEYCODE_WAKEUP`。
 
+回归测试必须固定 CPU 配置（核心数 + 调频策略），改动前后的数据才能横向比较。
+同一台低端机上实测：8 核 `performance` 是 0.00%，3 核 `interactive` 是 3.8%——
+差距来自调频升频延迟，不是代码。
+
 ## 构建
 
 ```bash
