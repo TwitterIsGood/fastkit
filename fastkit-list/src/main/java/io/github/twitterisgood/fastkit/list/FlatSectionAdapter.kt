@@ -58,8 +58,7 @@ class FlatSectionAdapter(
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private val sections = ArrayList<Section>(initial)
-    private var offsets = IntArray(0)
-    private var total = 0
+    private val index = SectionIndex()
     private var attached: WeakReference<RecyclerView>? = null
 
     private val typeIds = HashMap<Long, Int>()
@@ -70,7 +69,7 @@ class FlatSectionAdapter(
         rebuild()
     }
 
-    override fun getItemCount(): Int = total
+    override fun getItemCount(): Int = index.total
 
     override fun getItemViewType(position: Int): Int {
         val (index, local) = locate(position)
@@ -148,7 +147,7 @@ class FlatSectionAdapter(
 
     fun addSection(index: Int, section: Section) {
         val at = index.coerceIn(0, sections.size)
-        val start = if (at == 0) 0 else offsets[at - 1]
+        val start = this.index.offsetOf(at)
         sections.add(at, section)
         rebuild()
         if (section.itemCount() > 0) notifyItemRangeInserted(start, section.itemCount())
@@ -159,7 +158,7 @@ class FlatSectionAdapter(
      * 同时清掉类型表和回收池，避免旧类型视图被新列表误用。
      */
     fun replaceAll(next: List<Section>) {
-        val oldTotal = total
+        val oldTotal = index.total
         sections.clear()
         sections.addAll(next)
         rebuild()
@@ -168,7 +167,7 @@ class FlatSectionAdapter(
         typeSection.clear()
 
         if (oldTotal > 0) notifyItemRangeRemoved(0, oldTotal)
-        if (total > 0) notifyItemRangeInserted(0, total)
+        if (index.total > 0) notifyItemRangeInserted(0, index.total)
         attached?.get()?.recycledViewPool?.clear()
     }
 
@@ -178,29 +177,11 @@ class FlatSectionAdapter(
         notifyItemRangeChanged(offsetOf(index) + start, count, payload)
     }
 
-    internal fun offsetOf(index: Int): Int = if (index <= 0) 0 else offsets[index - 1]
+    internal fun offsetOf(index: Int): Int = this.index.offsetOf(index)
 
-    private fun rebuild() {
-        offsets = IntArray(sections.size)
-        var acc = 0
-        for (i in sections.indices) {
-            acc += sections[i].itemCount()
-            offsets[i] = acc
-        }
-        total = acc
-    }
+    private fun rebuild() = index.rebuild(sections.map { it.itemCount() })
 
-    private fun locate(position: Int): Pair<Int, Int> {
-        if (sections.isEmpty()) return 0 to 0
-        var lo = 0
-        var hi = offsets.size - 1
-        while (lo < hi) {
-            val mid = (lo + hi) ushr 1
-            if (offsets[mid] <= position) lo = mid + 1 else hi = mid
-        }
-        val base = if (lo <= 0) 0 else offsets[lo - 1]
-        return lo to (position - base)
-    }
+    private fun locate(position: Int): Pair<Int, Int> = index.locateLocal(position)
 
     companion object {
         private const val CACHE_PER_TYPE = 3

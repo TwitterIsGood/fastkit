@@ -23,4 +23,5 @@ android {
 
 dependencies {
     api(libs.androidx.recyclerview)
+    testImplementation(libs.junit)
 }

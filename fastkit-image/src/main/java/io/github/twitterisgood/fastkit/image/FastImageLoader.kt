@@ -43,11 +43,27 @@ class FastImageLoader private constructor(
     private val disk = DiskStore(File(appContext.cacheDir, "fastimg"), diskBytes)
     private val index = SizeIndex()
     private val inFlight = ConcurrentHashMap<String, Request>()
+    private val pool = BitmapPool(minOf(memoryBytes / 4, 8 * 1024 * 1024))
+
+    // 引用计数 + 在屏追踪：只有"不在缓存、也没被任何 view 显示"的位图才允许进池复用
+    private val recycleLock = Any()
+    private val refs = ConcurrentHashMap<Bitmap, java.util.concurrent.atomic.AtomicInteger>()
+    // newKeySet() 要 API 24，minSdk 21 只能用这个等价写法
+    private val cached: MutableSet<Bitmap> =
+        java.util.Collections.newSetFromMap(ConcurrentHashMap<Bitmap, Boolean>())
+    private val viewBitmaps = java.util.WeakHashMap<ImageView, Bitmap>()
 
     private val memory = object : LruCache<String, Bitmap>(memoryBytes) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
         override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
             index.remove(key)
+            cached.remove(oldValue)
+            synchronized(recycleLock) {
+                if ((refs[oldValue]?.get() ?: 0) == 0) {
+                    refs.remove(oldValue)
+                    pool.offer(oldValue)
+                }
+            }
         }
     }
 
@@ -97,19 +113,19 @@ class FastImageLoader private constructor(
         release(view)
         val exact = memory.get(keyOf(url, width, height))
         if (exact != null) {
-            view.setImageBitmap(exact)
+            show(view, exact)
             return
         }
         // 尺寸够接近的缓存图直接当结果；差太多的先当占位，同时请求正确尺寸
         val near = nearest(url, width, height)
         if (near != null && !isTooSmall(near, width, height)) {
-            view.setImageBitmap(near)
+            show(view, near)
             return
         }
         val req = enqueue(url, width, height, PRIORITY_VISIBLE)
         req.addTarget(view)
         view.tag = req
-        if (near != null) view.setImageBitmap(near)
+        if (near != null) show(view, near)
     }
 
     /** 滚动预取：只解到内存，不碰 UI；排在可见请求之后。 */
@@ -122,6 +138,29 @@ class FastImageLoader private constructor(
 
     /** 取消该 view 的未完成请求，保留当前显示的图。 */
     fun cancel(view: ImageView) = release(view)
+
+    /** 把位图贴到 view 上，并登记它在屏，防止被复用池覆盖。 */
+    private fun show(view: ImageView, bitmap: Bitmap) {
+        view.setImageBitmap(bitmap)
+        synchronized(recycleLock) {
+            val old = viewBitmaps.put(view, bitmap)
+            if (old === bitmap) return
+            if (old != null) unpinLocked(old)
+            val counter = refs[bitmap]
+            if (counter == null) {
+                refs[bitmap] = java.util.concurrent.atomic.AtomicInteger(1)
+            } else {
+                counter.incrementAndGet()
+            }
+        }
+    }
+
+    private fun unpinLocked(bitmap: Bitmap) {
+        val counter = refs[bitmap] ?: return
+        if (counter.decrementAndGet() > 0) return
+        refs.remove(bitmap)
+        if (!cached.contains(bitmap)) pool.offer(bitmap)
+    }
 
     /** 取消请求并清空 drawable。`onViewRecycled` 里必须调用，防止复用串图。 */
     fun clear(view: ImageView) {
@@ -147,6 +186,7 @@ class FastImageLoader private constructor(
             else -> return
         }
         memory.trimToSize(target)
+        if (target == 0) pool.clear()
     }
 
     private fun enqueue(url: String, w: Int, h: Int, priority: Int): Request {
@@ -178,6 +218,7 @@ class FastImageLoader private constructor(
 
             if (req.cancelled) return
             val bitmap = decodeWithRetry(bytes, req.width, req.height) ?: return
+            cached.add(bitmap)
             memory.put(req.key, bitmap)
             index.add(req.url, req.width, req.height, req.key)
             main.post { req.deliver(bitmap) }
@@ -187,12 +228,13 @@ class FastImageLoader private constructor(
     }
 
     private fun decodeWithRetry(bytes: ByteArray, w: Int, h: Int): Bitmap? = try {
-        decodeSampled(bytes, w, h, decodeConfig)
+        decodeSampled(bytes, w, h, decodeConfig, pool)
     } catch (oom: OutOfMemoryError) {
         // 低端机上大图解码是真的会 OOM，清空缓存后再试一次
         memory.evictAll()
+        pool.clear()
         try {
-            decodeSampled(bytes, w, h, decodeConfig)
+            decodeSampled(bytes, w, h, decodeConfig, pool)
         } catch (oom2: OutOfMemoryError) {
             null
         }
@@ -236,6 +278,9 @@ class FastImageLoader private constructor(
     private fun release(view: ImageView) {
         (view.tag as? Pending)?.detach(view)
         view.tag = null
+        synchronized(recycleLock) {
+            viewBitmaps.remove(view)?.let { unpinLocked(it) }
+        }
     }
 
     private fun keyOf(url: String, w: Int, h: Int) = "#$url#${w}x$h"
@@ -283,7 +328,7 @@ class FastImageLoader private constructor(
             for (ref in targets) {
                 val view = ref.get() ?: continue
                 if (view.tag !== this) continue
-                view.setImageBitmap(bitmap)
+                show(view, bitmap)
             }
             targets.removeAll { it.get() == null }
         }
@@ -381,7 +426,8 @@ internal fun decodeSampled(
     bytes: ByteArray,
     reqW: Int,
     reqH: Int,
-    config: Bitmap.Config
+    config: Bitmap.Config,
+    pool: BitmapPool? = null
 ): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -397,8 +443,21 @@ internal fun decodeSampled(
     val opts = BitmapFactory.Options().apply {
         inSampleSize = sample
         inPreferredConfig = config
+        // 解码结果默认是不可变的，而 inBitmap 只接受可变位图；打开它，结果才能回池
+        inMutable = pool != null
     }
-    val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
+    // 采样后的尺寸（向上取整）拿来在池里找一个同尺寸的空闲位图，直接写进去，省一次分配
+    val slotW = (srcW + sample - 1) / sample
+    val slotH = (srcH + sample - 1) / sample
+    pool?.take(slotW, slotH, config)?.let { opts.inBitmap = it }
+
+    val decoded = try {
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    } catch (e: IllegalArgumentException) {
+        // 不同版本对 inSampleSize 的取整规则不一致，候选对不上就退回普通解码
+        opts.inBitmap = null
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    } ?: return null
 
     if (reqW <= 0 || reqH <= 0) return decoded
     // 采样只按 2 的幂，结果可能仍明显大于目标；再缩一次，省掉每帧的绘制缩放
@@ -407,7 +466,10 @@ internal fun decodeSampled(
     val w = (decoded.width * scale).toInt().coerceAtLeast(1)
     val h = (decoded.height * scale).toInt().coerceAtLeast(1)
     val scaled = Bitmap.createScaledBitmap(decoded, w, h, true)
-    if (scaled !== decoded) decoded.recycle()
+    if (scaled !== decoded) {
+        // 缩放结果不可变，不能回池；中间那张采样图可以留着下次复用
+        if (decoded.isMutable) pool?.offer(decoded) else decoded.recycle()
+    }
     return scaled
 }
 
