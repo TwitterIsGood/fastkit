@@ -57,4 +57,6 @@ dependencies {
     implementation(project(":fastkit-image"))
     implementation(project(":fastkit-list"))
     implementation(libs.androidx.profileinstaller)
+    // generateBaselineProfile 从这里找采集用例；不挂这条配置就什么都不会采
+    baselineProfile(project(":baselineprofile"))
 }

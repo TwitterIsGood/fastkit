@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.test)
     alias(libs.plugins.kotlin.android)
+    // 采集模块也要应用这个插件，才会带上下游变体匹配所需的属性
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 android {

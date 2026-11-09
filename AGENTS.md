@@ -88,10 +88,16 @@ adb shell dumpsys gfxinfo <pkg>
 需要 API 28+ 的设备或模拟器：
 
 ```bash
-./gradlew :app:generateBaselineProfile
+ANDROID_SERIAL=<serial> ./gradlew :app:generateBaselineProfile
 ```
 
 API 24~27 由 `androidx.profileinstaller` 在启动时安装 profile；API 28+ 由系统在安装时处理。
+
+**已知限制：Windows 上跑不了。** 插件会为采集创建 `nonMinifiedRelease` /
+`benchmarkRelease` 变体，这两个变体的 `:app:compile*Kotlin` 会把一个 Provider 当成
+`scriptSources` 路径解析，报 `Could not stat file ...\app\provider(?)`。
+Kotlin 2.1.20 / 2.2.20、插件 1.5.0 / 1.6.0-alpha01 都能复现；`doNotTrackState()` 不起作用。
+在 macOS / Linux 或 CI 上执行同样的命令即可。
 
 ## 不要做的事
 
@@ -122,3 +128,5 @@ baselineprofile/            baseline.prof 采集，不参与 app 构建
 
 - `:fastkit-image` 不依赖 `:fastkit-list`，反之亦然。两者之间只能靠调用方用 lambda 连接。
 - 新能力新建 Gradle 模块 + 独立 namespace，不要塞进现有模块的根包。
+- 两个库都要有 `consumer-rules.pro`，并在 `defaultConfig` 里挂上（`consumerProguardFiles`），
+  否则下游开 R8 时库这边没有任何规则入口。
