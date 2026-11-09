@@ -51,20 +51,6 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    // generateBaselineProfile 在这台托管模拟器上采集，CI 的 ubuntu runner 有 KVM。
-    // 本机的 Windows 构建跑不了采集（见 AGENTS.md），所以这条路只给 CI 用。
-    testOptions {
-        managedDevices {
-            localDevices {
-                create("profileDevice") {
-                    device = "Pixel 6"
-                    apiLevel = 34
-                    systemImageSource = "aosp"
-                }
-            }
-        }
-    }
 }
 
 dependencies {

@@ -1,12 +1,12 @@
 name: Baseline Profile
 
-# 只在需要重新采集时手动触发：跑一次要拉起模拟器，20 分钟以上。
+# 只在需要重新采集时手动触发：跑一次要拉起模拟器，十几分钟。
 on:
   workflow_dispatch:
 
 jobs:
   generate:
-    # ubuntu runner 有 KVM，托管模拟器能跑起来；macOS runner 没有嵌套虚拟化
+    # ubuntu runner 有 KVM；macOS runner 没有嵌套虚拟化，模拟器跑不动
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -19,19 +19,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: 允许模拟器访问 /dev/kvm
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
       - name: 采集 baseline profile
-        run: >
-          ./gradlew :app:generateBaselineProfile
-          -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect
-          -Pandroid.experimental.testOptions.managedDevices.setupTimeoutMinutes=30
-          --console=plain
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: aosp
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+            -camera-back none -camera-front none
+          script: ./gradlew :app:generateBaselineProfile --console=plain
 
       - name: 上传产物
         if: always()
@@ -40,5 +39,5 @@ jobs:
           name: baseline-profile
           path: |
             app/src/main/baseline-prof.txt
-            app/build/outputs/managed_device_android_test_additional_output/**/*
+            **/build/reports/androidTests/**/*
           if-no-files-found: warn
