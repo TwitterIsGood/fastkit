@@ -1,3 +1,0 @@
-Performing Streamed Install
-adb.exe: failed to install app/build/outputs/apk/benchmark/app-benchmark.apk: Failure [INSTALL_FAILED_USER_RESTRICTED: Install canceled by user]
-
