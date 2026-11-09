@@ -85,11 +85,16 @@ class FastImageLoader private constructor(
         })
     }
 
-    /** 尺寸未知时先挂起，等 onLayout 拿到真实宽高再发请求（Play 的 FIFE 图也是这个行为）。 */
-    fun load(view: ImageView, url: String) {
+    /**
+     * 尺寸未知时先挂起，等 onLayout 拿到真实宽高再发请求（Play 的 FIFE 图也是这个行为）。
+     *
+     * [onSettled] 在这次加载真正结束时回调一次，成功、失败、被复用取消都算，永远在主线程。
+     * 首屏计数、转场、埋点都该用它，不要靠轮询 `drawable` 判活。
+     */
+    fun load(view: ImageView, url: String, onSettled: (() -> Unit)? = null) {
         val (w, h) = viewSize(view)
         if (w > 0 && h > 0) {
-            load(view, url, w, h)
+            load(view, url, w, h, onSettled)
             return
         }
         release(view)
@@ -102,28 +107,30 @@ class FastImageLoader private constructor(
                 val pending = v.tag as? DeferredLoad ?: return
                 if (pending.listener !== this) return
                 v.tag = null
-                load(v as ImageView, url)
+                load(v as ImageView, url, pending.onSettled)
             }
         }
-        view.tag = DeferredLoad(listener)
+        view.tag = DeferredLoad(listener, onSettled)
         view.addOnLayoutChangeListener(listener)
     }
 
-    fun load(view: ImageView, url: String, width: Int, height: Int) {
+    fun load(view: ImageView, url: String, width: Int, height: Int, onSettled: (() -> Unit)? = null) {
         release(view)
         val exact = memory.get(keyOf(url, width, height))
         if (exact != null) {
             show(view, exact)
+            onSettled?.invoke()
             return
         }
         // 尺寸够接近的缓存图直接当结果；差太多的先当占位，同时请求正确尺寸
         val near = nearest(url, width, height)
         if (near != null && !isTooSmall(near, width, height)) {
             show(view, near)
+            onSettled?.invoke()
             return
         }
         val req = enqueue(url, width, height, PRIORITY_VISIBLE)
-        req.addTarget(view)
+        req.addTarget(view, onSettled)
         view.tag = req
         if (near != null) show(view, near)
     }
@@ -212,7 +219,7 @@ class FastImageLoader private constructor(
                 val ch = (req.height / COARSE_DIVISOR).coerceAtLeast(1)
                 decodeWithRetry(bytes, cw, ch)?.let { coarse ->
                     if (req.cancelled) return
-                    main.post { req.deliver(coarse) }
+                    main.post { req.deliver(coarse, final = false) }
                 }
             }
 
@@ -221,9 +228,11 @@ class FastImageLoader private constructor(
             cached.add(bitmap)
             memory.put(req.key, bitmap)
             index.add(req.url, req.width, req.height, req.key)
-            main.post { req.deliver(bitmap) }
+            main.post { req.deliver(bitmap, final = true) }
         } finally {
             inFlight.remove(req.key, req)
+            // 失败或在中途被取消时不会走到 deliver，兜底保证 onSettled 一定回调
+            main.post { req.settle() }
         }
     }
 
@@ -311,19 +320,36 @@ class FastImageLoader private constructor(
         var cancelled = false
 
         private val targets = CopyOnWriteArrayList<WeakReference<ImageView>>()
+        private val settlers = CopyOnWriteArrayList<() -> Unit>()
 
-        fun addTarget(view: ImageView) {
+        fun addTarget(view: ImageView, onSettled: (() -> Unit)?) {
             targets.add(WeakReference(view))
+            if (onSettled != null) settlers.add(onSettled)
         }
 
         fun hasTargets(): Boolean = targets.isNotEmpty()
 
         override fun detach(view: ImageView) {
             targets.removeAll { it.get() == null || it.get() === view }
-            if (targets.isEmpty()) cancelled = true
+            if (targets.isEmpty()) {
+                cancelled = true
+                settle()
+            }
         }
 
-        fun deliver(bitmap: Bitmap) {
+        /**
+         * 每个请求只结算一次。callers 分布在主线程（deliver / detach）和 worker 兜底，
+         * 靠清空 settlers 保证幂等。
+         */
+        fun settle() {
+            if (settlers.isEmpty()) return
+            val pending = settlers.toList()
+            settlers.clear()
+            pending.forEach { it() }
+        }
+
+        /** [final] 为 false 时是 1/4 粗图，只上屏不结算。 */
+        fun deliver(bitmap: Bitmap, final: Boolean) {
             if (cancelled) return
             for (ref in targets) {
                 val view = ref.get() ?: continue
@@ -331,14 +357,17 @@ class FastImageLoader private constructor(
                 show(view, bitmap)
             }
             targets.removeAll { it.get() == null }
+            if (final) settle()
         }
     }
 
     private class DeferredLoad(
-        val listener: View.OnLayoutChangeListener
+        val listener: View.OnLayoutChangeListener,
+        val onSettled: (() -> Unit)?
     ) : Pending {
         override fun detach(view: ImageView) {
             view.removeOnLayoutChangeListener(listener)
+            onSettled?.invoke()
         }
     }
 
@@ -475,13 +504,22 @@ internal fun decodeSampled(
 
 internal class DiskStore(private val dir: File, private val maxBytes: Long) {
 
-    init {
+    private var ready = false
+
+    /**
+     * 建目录和扫残留都是磁盘 I/O。构造函数会在 `init()` 里被调用，而 `init()` 通常在
+     * `Application.onCreate` 主线程上，所以这里必须懒到第一次真正读盘时再做。
+     */
+    private fun prepare() {
+        if (ready) return
         dir.mkdirs()
         // 上次写入被打断会留下半截文件
         dir.listFiles()?.forEach { if (it.name.endsWith(TMP_SUFFIX)) it.delete() }
+        ready = true
     }
 
     fun get(key: String): ByteArray? = synchronized(this) {
+        prepare()
         val f = fileFor(key)
         if (!f.exists()) return null
         val bytes = runCatching { f.readBytes() }.getOrNull()
@@ -494,6 +532,7 @@ internal class DiskStore(private val dir: File, private val maxBytes: Long) {
     }
 
     fun put(key: String, bytes: ByteArray) = synchronized(this) {
+        prepare()
         val target = fileFor(key)
         val tmp = File(target.parentFile, target.name + TMP_SUFFIX)
         runCatching {
@@ -513,6 +552,7 @@ internal class DiskStore(private val dir: File, private val maxBytes: Long) {
     }
 
     fun clear() = synchronized(this) {
+        prepare()
         dir.listFiles()?.forEach { it.delete() }
     }
 

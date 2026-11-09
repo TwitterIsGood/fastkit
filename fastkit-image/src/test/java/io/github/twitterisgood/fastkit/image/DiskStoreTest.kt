@@ -33,10 +33,13 @@ class DiskStoreTest {
     }
 
     @Test
-    fun `启动时清掉上次写入的残片`() {
+    fun `首次读盘时清掉上次写入的残片`() {
         val d = dir()
         File(d, "half-written.tmp").writeBytes(ByteArray(5))
-        DiskStore(d, 1024)
+        val store = DiskStore(d, 1024)
+        // 构造不能碰磁盘（会在 Application.onCreate 主线程上执行），所以清理推迟到第一次访问
+        assertTrue(d.listFiles()!!.any { it.name.endsWith(".tmp") })
+        store.get("miss")
         assertTrue(d.listFiles()!!.none { it.name.endsWith(".tmp") })
     }
 

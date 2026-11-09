@@ -51,6 +51,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    buildFeatures {
+        // StrictMode 只在 debug 装，用 BuildConfig.DEBUG 判断；AGP 8 起默认不生成这个类
+        buildConfig = true
+    }
 }
 
 dependencies {

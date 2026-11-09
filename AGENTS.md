@@ -39,15 +39,21 @@
 - 列表滚动期间不做同步 I/O、数据库查询、JSON 解析。
 - 任何耗时超过 ~4ms 的主线程工作都要挪到后台。
 - 不在 `onBindViewHolder` 里创建对象池之外的重对象（`Paint`、`Path`、格式化器要复用）。
+- debug 包默认装 `StrictMode`（见 `DemoApplication`），主线程 I/O 直接 `penaltyDeath`。
+  别为了让 app 跑起来去关它——它炸的位置就是该挪到后台的那一行。
+- 内容真正可见时必须调 `reportFullyDrawn()`。首帧只是骨架屏，
+  `am start -W` 的 `TotalTime` 会把「等图片」的那段完全藏掉（冷缓存实测差 400ms）。
 
 ## 性能验证
 
 改完列表/图片相关代码，必须给出实测数据，不接受主观描述。
 
 ```bash
-# 冷启动
+# 冷启动：TotalTime 是首帧，Fully drawn 是内容可见，两个都要报
 adb shell am force-stop <pkg>
+adb shell logcat -c
 adb shell am start -W -n <pkg>/.DemoActivity   # demo 的入口
+adb shell logcat -d | grep 'Fully drawn'        # ActivityManager 打的，带 +XXXms
 
 # 滑动帧数据
 adb shell dumpsys gfxinfo <pkg> reset
@@ -129,6 +135,7 @@ fastkit-list/src/main/java/io/github/twitterisgood/fastkit/list/
   PrefetchScrollListener.kt 滚动预取
 
 app/src/main/java/io/github/twitterisgood/fastkit/demo/
+  DemoApplication.kt        debug 包装 StrictMode
   DemoActivity.kt           示例，同时依赖两个 SDK
 
 baselineprofile/            baseline.prof 采集，不参与 app 构建
