@@ -21,7 +21,8 @@ class BaselineProfileGenerator {
 
     @Test
     fun generate() {
-        rule.collect(packageName = TARGET) {
+        // includeInStartupProfile：冷启动那几帧单独出一份 startup 规则，启动路径才算真 AOT
+        rule.collect(packageName = TARGET, includeInStartupProfile = true) {
             pressHome()
             launchApp()
 

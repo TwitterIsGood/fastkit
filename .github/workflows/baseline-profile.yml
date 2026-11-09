@@ -39,6 +39,7 @@ jobs:
         with:
           name: baseline-profile
           path: |
-            app/src/main/baseline-prof.txt
+            app/src/**/baseline-prof.txt
+            app/src/**/baseline-prof-*.txt
             **/build/reports/androidTests/**/*
           if-no-files-found: warn
